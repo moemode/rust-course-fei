@@ -1,0 +1,42 @@
+{
+    "name": "Rust Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "github.copilot-chat",
+                "github.copilot",
+                "tomoki1207.pdf"
+            ],
+            "settings": {
+                "editor.formatOnSave": true,
+                "[rust]": {
+                    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+                },
+                "rust-analyzer.checkOnSave.command": "clippy",
+                "rust-analyzer.linkedProjects": [
+                    "lessons/01/exercises/Cargo.toml",
+                    "lessons/02/exercises/Cargo.toml",
+                    "lessons/03/exercises/Cargo.toml",
+                    "lessons/04/exercises/Cargo.toml",
+                    "lessons/05/exercises/Cargo.toml",
+                    "lessons/06/exercises/Cargo.toml",
+                    "lessons/07/exercises/Cargo.toml",
+                    "lessons/08/exercises/Cargo.toml",
+                    "lessons/09/exercises/Cargo.toml",
+                    "lessons/10/exercises/Cargo.toml"
+                ],
+                "editor.codeActionsOnSave": {
+                    "source.organizeImports": "always"
+                },
+                "files.readonlyInclude": {
+                    "**/.cargo/registry/src/**/*.rs": true,
+                    "**/lib/rustlib/src/rust/library/**/*.rs": true
+                }
+            }
+        }
+    }
+}
