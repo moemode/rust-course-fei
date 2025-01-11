@@ -22,35 +22,58 @@
 //   - If the PC is running and its `idle_time` is larger than 1000, it switches to `Sleeping`.
 //   - If the PC is sleeping and its `sleep_time` is larger than 500, it switches to `Off`.
 
+#[derive(Default)]
 struct ComputerState {
     // TODO: represent the state of the computer
+    running: bool,
+    sleeping: bool,
+    idle_time: u32,
+    sleep_time: u32,
+    up_time: u32,
 }
 
 impl ComputerState {
     // Returns a computer that is turned off
     fn new_off() -> Self {
-        todo!()
+        ComputerState {
+            ..Default::default()
+        }
     }
 
     // Returns a computer that is turned on
     fn new_on() -> Self {
-        todo!()
+        ComputerState {
+            running: true,
+            ..Default::default()
+        }
     }
 
     fn is_on(&self) -> bool {
-        todo!()
+        self.running || self.sleeping
     }
     fn is_sleeping(&self) -> bool {
-        todo!()
+        self.sleeping
     }
     fn uptime(&self) -> u32 {
-        todo!()
+        self.up_time
     }
     fn idle_time(&self) -> u32 {
-        todo!()
+        self.idle_time
     }
     fn sleep_time(&self) -> u32 {
-        todo!()
+        self.sleep_time
+    }
+
+    fn running_to_sleep(&mut self) {
+        self.running = false;
+        self.sleeping = true;
+        self.idle_time = 0;
+    }
+
+    fn sleep_to_running(&mut self) {
+        self.running = true;
+        self.sleeping = false;
+        self.sleep_time = 0;
     }
 }
 
@@ -62,7 +85,40 @@ enum Event {
 }
 
 fn pc_transition(mut computer: ComputerState, event: Event) -> ComputerState {
-    todo!()
+    match event {
+        Event::TurnOn if !computer.is_on() => ComputerState::new_on(),
+        Event::TurnOff => ComputerState::new_off(),
+        Event::PassTime(t) => {
+            let mut remaining_time = t;
+            if computer.running {
+                computer.idle_time += remaining_time;
+                if computer.idle_time > 1000 {
+                    remaining_time = computer.idle_time - 1000;
+                    computer.running_to_sleep();
+                }
+            }
+            if computer.is_sleeping() {
+                computer.sleep_time += remaining_time;
+                if computer.sleep_time() > 500 {
+                    return ComputerState::new_off();
+                }
+            }
+            if computer.is_on() {
+                computer.up_time += t;
+            }
+            computer
+        }
+        Event::MoveMouse => {
+            if computer.running {
+                computer.idle_time = 0;
+            }
+            if computer.is_sleeping() {
+                computer.sleep_to_running();
+            }
+            computer
+        }
+        _ => computer,
+    }
 }
 
 /// Below you can find a set of unit tests.
