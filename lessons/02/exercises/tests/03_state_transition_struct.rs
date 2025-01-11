@@ -88,30 +88,28 @@ fn pc_transition(mut computer: ComputerState, event: Event) -> ComputerState {
     match event {
         Event::TurnOn if !computer.is_on() => ComputerState::new_on(),
         Event::TurnOff => ComputerState::new_off(),
-        Event::PassTime(t) if computer.is_on() => {
-            computer.up_time += t;
-            let mut remaining_time = t;
-            if computer.running {
-                computer.idle_time += remaining_time;
-                if computer.idle_time > 1000 {
-                    remaining_time = computer.idle_time - 1000;
-                    computer.running_to_sleep();
-                }
-            }
-            if computer.is_sleeping() {
-                computer.sleep_time += remaining_time;
-                if computer.sleep_time() > 500 {
-                    return ComputerState::new_off();
-                }
-            }
+        Event::MoveMouse if computer.running => {
+            computer.idle_time = 0;
             computer
         }
-        Event::MoveMouse => {
+        Event::MoveMouse if computer.sleeping => {
+            computer.sleep_to_running();
+            computer
+        }
+        Event::PassTime(mut time) if computer.is_on() => {
+            computer.up_time += time;
             if computer.running {
-                computer.idle_time = 0;
+                computer.idle_time += time;
+            }
+            if computer.idle_time > 1000 {
+                time = computer.idle_time - 1000;
+                computer.running_to_sleep();
             }
             if computer.is_sleeping() {
-                computer.sleep_to_running();
+                computer.sleep_time += time;
+            }
+            if computer.sleep_time > 500 {
+                return ComputerState::new_off();
             }
             computer
         }
