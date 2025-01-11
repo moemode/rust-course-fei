@@ -7,6 +7,7 @@
 // How does that type look like in Rust?
 
 /// Below you can find a set of unit tests.
+use week01::find_largest;
 #[cfg(test)]
 mod tests {
     use super::find_largest;

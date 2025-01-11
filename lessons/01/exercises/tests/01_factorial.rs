@@ -1,6 +1,6 @@
 //! Run this file with `cargo test --test 01_factorial`.
 
-// TODO: Implement a simple factorial function.
+use week01::factorial;
 
 /// Below you can find a set of unit tests.
 #[cfg(test)]
