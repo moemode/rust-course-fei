@@ -13,7 +13,7 @@
 /// Below you can find a set of unit tests.
 #[cfg(test)]
 mod tests {
-    use crate::{perform_calculation, Op};
+    use week02::{perform_calculation, Op};
 
     #[test]
     fn calc_add() {
