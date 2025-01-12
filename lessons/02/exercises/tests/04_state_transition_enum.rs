@@ -19,6 +19,16 @@ enum ComputerState {
     },
 }
 
+impl ComputerState {
+    fn new_running(uptime: u32, idle_time: u32) -> Self {
+        ComputerState::Running { uptime, idle_time }
+    }
+
+    fn new_sleeping(uptime: u32, sleep_time: u32) -> Self {
+        ComputerState::Sleeping { uptime, sleep_time }
+    }
+}
+
 enum Event {
     TurnOn,
     TurnOff,
@@ -50,6 +60,43 @@ enum Event {
 //
 // Compare this approach with using a struct (which we did on the lesson).
 // Is it easier with an enum or with a struct?
+
+fn pc_transition(computer: ComputerState, event: Event) -> ComputerState {
+    match (&computer, event) {
+        (ComputerState::Off, Event::TurnOn) => ComputerState::new_running(0, 0),
+        (ComputerState::Running { .. } | ComputerState::Sleeping { .. }, Event::TurnOn) => computer,
+        (ComputerState::Off, Event::MoveMouse | Event::TurnOff | Event::PassTime(_)) => computer,
+        (ComputerState::Running { .. } | ComputerState::Sleeping { .. }, Event::TurnOff) => {
+            ComputerState::Off
+        }
+        (&ComputerState::Running { uptime, .. }, Event::MoveMouse) => {
+            ComputerState::new_running(uptime, 0)
+        }
+        (&ComputerState::Sleeping { uptime, .. }, Event::MoveMouse) => {
+            ComputerState::new_running(uptime, 0)
+        }
+        (ComputerState::Sleeping { uptime, sleep_time }, Event::PassTime(t)) => {
+            let sleep_time = sleep_time + t;
+            if sleep_time > 500 {
+                ComputerState::Off
+            } else {
+                ComputerState::new_sleeping(uptime + t, sleep_time)
+            }
+        }
+        (ComputerState::Running { uptime, idle_time }, Event::PassTime(t)) => {
+            if idle_time + t > 1000 {
+                let rem_time = idle_time + t - 1000;
+                let time_until_sleep = 1000 - idle_time;
+                pc_transition(
+                    ComputerState::new_sleeping(uptime + time_until_sleep, 0),
+                    Event::PassTime(rem_time),
+                )
+            } else {
+                ComputerState::new_running(uptime + t, idle_time + t)
+            }
+        }
+    }
+}
 
 /// Below you can find a set of unit tests.
 #[cfg(test)]
