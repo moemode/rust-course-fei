@@ -11,7 +11,24 @@
 ///
 /// **DO NOT** use Rayon or any other crate, implement the distribution manually using only libstd.
 fn parallel_slice_sum(items: &[u64], threads: usize) -> u64 {
-    todo!()
+    if items.len() < 2 * threads {
+        return items.iter().sum();
+    }
+    let items_per_thread = items.len() / threads;
+    let chunks = items.chunks(items_per_thread);
+    let mut sum = 0;
+    // split items
+    std::thread::scope(|s| {
+        let mut handles = vec![];
+        for chunk in chunks {
+            let handle = s.spawn(|| chunk.iter().sum::<u64>());
+            handles.push(handle);
+        }
+        for handle in handles {
+            sum += handle.join().unwrap();
+        }
+    });
+    sum
 }
 
 /// Below you can find a set of unit tests.
