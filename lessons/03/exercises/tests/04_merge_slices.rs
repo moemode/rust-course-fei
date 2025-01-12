@@ -11,11 +11,11 @@
 /// Below you can find a set of unit tests.
 #[cfg(test)]
 mod tests {
-    use crate::merge_slices;
+    use week03::merge_slices::merge_slices;
 
     #[test]
     fn merge_slices_empty() {
-        assert_eq!(merge_slices(&[], &[]), vec![]);
+        assert_eq!(merge_slices::<i32>(&[], &[]), vec![]);
     }
 
     #[test]
