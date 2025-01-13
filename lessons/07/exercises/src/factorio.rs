@@ -185,7 +185,9 @@ where
         let (output_tx, output_rx) = sync_channel(queue_size);
         let h = thread::spawn(move || {
             while let Ok(t) = input_rx.recv() {
-                output_tx.send(t).unwrap()
+                if output_tx.send(t).is_err() {
+                    break;
+                }
             }
         });
         FactorioBuilder {
@@ -212,9 +214,12 @@ where
         U: Send + 'static,
     {
         let (output_tx, output_rx) = sync_channel::<U>(self.queue_size);
+        let old_output_rx = self.output_rx;
         let h = thread::spawn(move || {
-            while let Ok(u) = self.output_rx.recv() {
-                output_tx.send(f(u)).unwrap()
+            while let Ok(u) = old_output_rx.recv() {
+                if output_tx.send(f(u)).is_err() {
+                    break;
+                }
             }
         });
         let mut handles = self.pipeline.handles;
@@ -233,5 +238,9 @@ impl Pipeline {
         Self { handles: vec![] }
     }
 
-    pub fn close(self) {}
+    pub fn close(self) {
+        for h in self.handles {
+            h.join().unwrap();
+        }
+    }
 }

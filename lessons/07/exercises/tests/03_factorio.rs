@@ -228,7 +228,6 @@ mod tests {
         drop(rx);
         factorio.close();
     }
-    /*
 
     #[test]
     fn map_no_clone() {
@@ -398,6 +397,8 @@ mod tests {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factorio.close())).is_err()
         );
     }
+    /*
+
 
     /// I --> Filter --> O
     #[test]
