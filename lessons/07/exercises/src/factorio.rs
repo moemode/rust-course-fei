@@ -158,18 +158,22 @@
 
 use std::{
     marker::PhantomData,
-    sync::mpsc::{sync_channel, Receiver, Sender, SyncSender},
+    sync::{
+        self,
+        mpsc::{sync_channel, Receiver, Sender, SyncSender},
+    },
+    thread::{self, JoinHandle},
 };
 
 pub struct FactorioBuilder<I, O> {
     queue_size: usize,
-    pipeline: Pipeline<I, O>,
+    pipeline: Pipeline,
     input: SyncSender<I>,
     output: Receiver<O>,
 }
 
-pub struct Pipeline<I, O> {
-    k: PhantomData<(I, O)>,
+pub struct Pipeline {
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl<T> FactorioBuilder<T, T>
@@ -180,19 +184,48 @@ where
         let (input, output) = sync_channel(queue_size);
         FactorioBuilder {
             queue_size,
-            pipeline: Pipeline { k: PhantomData },
+            pipeline: Pipeline::new(),
             input,
             output,
         }
     }
 }
 
-impl<I, O> FactorioBuilder<I, O> {
-    pub fn build(self) -> (Pipeline<I, O>, SyncSender<I>, Receiver<O>) {
+impl<I, O> FactorioBuilder<I, O>
+where
+    I: Send + 'static,
+    O: Send + 'static,
+{
+    pub fn build(self) -> (Pipeline, SyncSender<I>, Receiver<O>) {
         (self.pipeline, self.input, self.output)
+    }
+
+    pub fn map<F, U>(self, f: F) -> FactorioBuilder<I, U>
+    where
+        F: Fn(O) -> U + Send + 'static,
+        U: Send + 'static,
+    {
+        let (output_tx, output_rx) = sync_channel::<U>(self.queue_size);
+        let h = thread::spawn(move || {
+            while let Ok(u) = self.output.recv() {
+                output_tx.send(f(u)).unwrap()
+            }
+        });
+        let mut handles = self.pipeline.handles;
+        handles.push(h);
+        FactorioBuilder {
+            queue_size: self.queue_size,
+            pipeline: Pipeline { handles },
+            input: self.input,
+            output: output_rx,
+        }
     }
 }
 
-impl<I, O> Pipeline<I, O> {
+impl Pipeline {
+    fn new() -> Self {
+        Self { handles: vec![] }
+    }
+
     pub fn close(self) {}
 }

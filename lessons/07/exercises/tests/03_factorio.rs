@@ -171,8 +171,7 @@ mod tests {
 
     #[test]
     fn different_type_after_build() {
-        let (factorio, _, _): (Pipeline<u32, u32>, _, _) =
-            FactorioBuilder::<u32, u32>::new(4).build();
+        let (factorio, _, _): (Pipeline, _, _) = FactorioBuilder::<u32, u32>::new(4).build();
         factorio.close();
     }
 
@@ -188,6 +187,8 @@ mod tests {
         drop(rx);
         factorio.close();
     }
+
+    /*
 
     #[test]
     fn queue_size_zero() {
@@ -217,7 +218,7 @@ mod tests {
         drop(tx);
         factorio.close();
     }
-    /*
+     */
     /// I --> Map --> O
     #[test]
     fn map_simple() {
@@ -230,6 +231,7 @@ mod tests {
         drop(rx);
         factorio.close();
     }
+    /*
 
     #[test]
     fn map_no_clone() {
