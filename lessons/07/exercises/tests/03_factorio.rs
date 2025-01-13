@@ -188,8 +188,6 @@ mod tests {
         factorio.close();
     }
 
-    /*
-
     #[test]
     fn queue_size_zero() {
         let (factorio, tx, rx) = FactorioBuilder::new(0).build();
@@ -218,7 +216,6 @@ mod tests {
         drop(tx);
         factorio.close();
     }
-     */
     /// I --> Map --> O
     #[test]
     fn map_simple() {

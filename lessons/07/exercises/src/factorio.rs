@@ -168,8 +168,8 @@ use std::{
 pub struct FactorioBuilder<I, O> {
     queue_size: usize,
     pipeline: Pipeline,
-    input: SyncSender<I>,
-    output: Receiver<O>,
+    input_tx: SyncSender<I>,
+    output_rx: Receiver<O>,
 }
 
 pub struct Pipeline {
@@ -181,12 +181,18 @@ where
     T: Send + 'static,
 {
     pub fn new(queue_size: usize) -> Self {
-        let (input, output) = sync_channel(queue_size);
+        let (input_tx, input_rx) = sync_channel(queue_size);
+        let (output_tx, output_rx) = sync_channel(queue_size);
+        let h = thread::spawn(move || {
+            while let Ok(t) = input_rx.recv() {
+                output_tx.send(t).unwrap()
+            }
+        });
         FactorioBuilder {
             queue_size,
-            pipeline: Pipeline::new(),
-            input,
-            output,
+            pipeline: Pipeline { handles: vec![h] },
+            input_tx,
+            output_rx,
         }
     }
 }
@@ -197,7 +203,7 @@ where
     O: Send + 'static,
 {
     pub fn build(self) -> (Pipeline, SyncSender<I>, Receiver<O>) {
-        (self.pipeline, self.input, self.output)
+        (self.pipeline, self.input_tx, self.output_rx)
     }
 
     pub fn map<F, U>(self, f: F) -> FactorioBuilder<I, U>
@@ -207,7 +213,7 @@ where
     {
         let (output_tx, output_rx) = sync_channel::<U>(self.queue_size);
         let h = thread::spawn(move || {
-            while let Ok(u) = self.output.recv() {
+            while let Ok(u) = self.output_rx.recv() {
                 output_tx.send(f(u)).unwrap()
             }
         });
@@ -216,8 +222,8 @@ where
         FactorioBuilder {
             queue_size: self.queue_size,
             pipeline: Pipeline { handles },
-            input: self.input,
-            output: output_rx,
+            input_tx: self.input_tx,
+            output_rx,
         }
     }
 }
