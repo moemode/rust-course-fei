@@ -54,10 +54,10 @@
 /// Below you can find a set of unit tests.
 #[cfg(test)]
 mod tests {
-    use crate::WorkerQueue;
     use std::sync::{Arc, Mutex};
     use std::thread::ThreadId;
     use std::time::{Duration, Instant};
+    use week07::WorkerQueue;
 
     #[test]
     fn empty_queue() {
