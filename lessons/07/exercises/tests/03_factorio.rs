@@ -397,8 +397,6 @@ mod tests {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factorio.close())).is_err()
         );
     }
-    /*
-
 
     /// I --> Filter --> O
     #[test]
@@ -819,10 +817,8 @@ mod tests {
         drop(rx);
         factorio.close();
     }
-     */
 
     // TODO(bonus): uncomment the following tests and make them pass :)
-    /*
     #[test]
     #[should_panic]
     fn fork_join_panic() {
@@ -878,5 +874,4 @@ mod tests {
         drop(rx);
         factorio.close();
     }
-    */
 }

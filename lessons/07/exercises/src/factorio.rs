@@ -157,12 +157,13 @@
 //! GDB/LLDB integrated within an IDE).
 
 use std::{
-    marker::PhantomData,
     sync::{
         self,
         mpsc::{sync_channel, Receiver, Sender, SyncSender},
+        Arc,
     },
     thread::{self, JoinHandle},
+    vec,
 };
 
 pub struct FactorioBuilder<I, O> {
@@ -186,7 +187,7 @@ where
         let h = thread::spawn(move || {
             while let Ok(t) = input_rx.recv() {
                 if output_tx.send(t).is_err() {
-                    break;
+                    return;
                 }
             }
         });
@@ -202,7 +203,7 @@ where
 impl<I, O> FactorioBuilder<I, O>
 where
     I: Send + 'static,
-    O: Send + 'static,
+    O: Send + Sync + 'static,
 {
     pub fn build(self) -> (Pipeline, SyncSender<I>, Receiver<O>) {
         (self.pipeline, self.input_tx, self.output_rx)
@@ -213,12 +214,31 @@ where
         F: Fn(O) -> U + Send + 'static,
         U: Send + 'static,
     {
+        let f = move |o| Some(f(o));
+        self.filter_map(f)
+    }
+
+    pub fn filter<F>(self, f: F) -> FactorioBuilder<I, O>
+    where
+        F: Fn(&O) -> bool + Send + 'static,
+    {
+        let f = move |o| f(&o).then_some(o);
+        self.filter_map(f)
+    }
+
+    pub fn filter_map<F, U>(self, f: F) -> FactorioBuilder<I, U>
+    where
+        F: Fn(O) -> Option<U> + Send + 'static,
+        U: Send + 'static,
+    {
         let (output_tx, output_rx) = sync_channel::<U>(self.queue_size);
         let old_output_rx = self.output_rx;
         let h = thread::spawn(move || {
-            while let Ok(u) = old_output_rx.recv() {
-                if output_tx.send(f(u)).is_err() {
-                    break;
+            while let Ok(o) = old_output_rx.recv() {
+                if let Some(u) = f(o) {
+                    if output_tx.send(u).is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -229,6 +249,77 @@ where
             pipeline: Pipeline { handles },
             input_tx: self.input_tx,
             output_rx,
+        }
+    }
+
+    pub fn fork_join<F, L, J, U>(
+        self,
+        worker_function: F,
+        n_lines: usize,
+        join: J,
+    ) -> FactorioBuilder<I, U>
+    where
+        F: Fn(&O, usize) -> L + Sync + Send + 'static,
+        L: 'static + Send,
+        J: Fn(Vec<L>) -> U + Send + 'static,
+        U: 'static + Send,
+    {
+        let worker_function = Arc::new(worker_function);
+        let mut worker_input_tx = Vec::with_capacity(n_lines);
+        let mut worker_output_rx = Vec::with_capacity(n_lines);
+        let mut worker_handles = vec![];
+        for _ in 0..n_lines {
+            let (input_tx, input_rx) = sync_channel::<(Arc<O>, usize)>(self.queue_size);
+            let (output_tx, output_rx) = sync_channel::<L>(self.queue_size);
+            worker_input_tx.push(input_tx);
+            worker_output_rx.push(output_rx);
+            let worker_fn = worker_function.clone();
+            let h = thread::spawn(move || {
+                while let Ok((o, line)) = input_rx.recv() {
+                    if output_tx.send(worker_fn(o.as_ref(), line)).is_err() {
+                        return;
+                    }
+                }
+            });
+            worker_handles.push(h);
+        }
+
+        let distributer = thread::spawn(move || {
+            while let Ok(o) = self.output_rx.recv() {
+                let o = Arc::new(o);
+                for (l, in_tx) in worker_input_tx.iter().enumerate() {
+                    if in_tx.send((o.clone(), l)).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+
+        let (new_output_tx, new_output_rx) = sync_channel::<U>(self.queue_size);
+        let gatherer = thread::spawn(move || loop {
+            let mut worker_outputs = vec![];
+            for out_rx in &worker_output_rx {
+                if let Ok(worker_output) = out_rx.recv() {
+                    worker_outputs.push(worker_output);
+                } else {
+                    return;
+                }
+            }
+            let output = join(worker_outputs);
+            if new_output_tx.send(output).is_err() {
+                return;
+            };
+        });
+
+        let mut handles = self.pipeline.handles;
+        handles.extend(worker_handles);
+        handles.push(distributer);
+        handles.push(gatherer);
+        FactorioBuilder {
+            queue_size: self.queue_size,
+            pipeline: Pipeline { handles },
+            input_tx: self.input_tx,
+            output_rx: new_output_rx,
         }
     }
 }
