@@ -9,7 +9,8 @@
                 "rust-lang.rust-analyzer",
                 "github.copilot-chat",
                 "github.copilot",
-                "tomoki1207.pdf"
+                "tomoki1207.pdf",
+                "ms-azuretools.vscode-docker"
             ],
             "settings": {
                 "editor.formatOnSave": true,
@@ -27,7 +28,8 @@
                     "lessons/07/exercises/Cargo.toml",
                     "lessons/08/exercises/Cargo.toml",
                     "lessons/09/exercises/Cargo.toml",
-                    "lessons/10/exercises/Cargo.toml"
+                    "lessons/10/exercises/Cargo.toml",
+                    "playground/Cargo.toml"
                 ],
                 "editor.codeActionsOnSave": {
                     "source.organizeImports": "always"
@@ -38,5 +40,6 @@
                 }
             }
         }
-    }
+    },
+    "postCreateCommand": "cargo install cargo-watch"
 }

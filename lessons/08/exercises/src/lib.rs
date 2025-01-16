@@ -27,8 +27,14 @@
 mod messages;
 /// Message reading
 mod reader;
+/// Server
+mod server;
 /// Message writing
 mod writer;
+
+pub use messages::{ClientToServerMsg, ServerToClientMsg};
+pub use reader::MessageReader;
+pub use writer::MessageWriter;
 
 #[derive(Copy, Clone)]
 struct ServerOpts {
@@ -72,8 +78,12 @@ struct ServerOpts {
 /// Think about how you can get around this - can you find some way to "wake" the threads up?
 ///
 /// See tests for more details.
-fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> { todo!() }
+use server::RunningServer;
 
+fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
+    let mut server = server::Server::new(opts.max_clients)?;
+    Ok(server.run())
+}
 
 #[cfg(test)]
 mod tests {
