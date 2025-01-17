@@ -1,5 +1,6 @@
-use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 use crate::{ClientToServerMsg, MessageReader, MessageWriter, ServerToClientMsg};
 use std::{
@@ -8,36 +9,6 @@ use std::{
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
-
-struct SharedWriter {
-    writer: Mutex<MessageWriter<ServerToClientMsg, SocketWrapper>>,
-}
-
-/* pub struct Server {
-    port: u16,
-    max_clients: usize,
-    clients: Arc<DashMap<String, Mutex<ConnectedClient>>>,
-    listener: Option<Arc<TcpListener>>,
-    acceptor_handle: Option<JoinHandle<anyhow::Result<()>>>,
-    client_threads: Arc<Mutex<Vec<JoinHandle<anyhow::Result<()>>>>>,
-    terminated: Arc<AtomicBool>,
-} */
-
-pub struct RunningServer {
-    pub port: u16,
-    max_clients: usize,
-    clients: Arc<DashMap<String, SharedWriter>>,
-    listener: TcpListener,
-    acceptor_handle: Option<JoinHandle<anyhow::Result<()>>>,
-    client_handles: Arc<Mutex<Vec<JoinHandle<anyhow::Result<()>>>>>,
-    terminated: Arc<AtomicBool>,
-}
-
-impl RunningServer {
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-}
 
 struct SocketWrapper(Arc<TcpStream>);
 
@@ -57,6 +28,26 @@ impl Write for SocketWrapper {
     }
 }
 
+struct SharedWriter {
+    writer: Mutex<MessageWriter<ServerToClientMsg, SocketWrapper>>,
+}
+
+pub struct RunningServer {
+    pub port: u16,
+    max_clients: usize,
+    terminated: Arc<AtomicBool>,
+    clients: Arc<RwLock<HashMap<String, SharedWriter>>>,
+    listener: TcpListener,
+    acceptor_handle: Option<JoinHandle<anyhow::Result<()>>>,
+    client_handles: Arc<Mutex<Vec<JoinHandle<anyhow::Result<()>>>>>,
+}
+
+impl RunningServer {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
 impl RunningServer {
     pub fn new(max_clients: usize) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
@@ -65,8 +56,8 @@ impl RunningServer {
         Ok(Self {
             port,
             max_clients,
-            clients: Arc::new(DashMap::new()),
-            listener: listener,
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            listener,
             acceptor_handle: None,
             client_handles: Arc::new(Mutex::new(vec![])),
             terminated: Arc::new(AtomicBool::new(false)),
@@ -115,7 +106,7 @@ impl RunningServer {
     fn handle_client(
         stream: std::net::TcpStream,
         addr: std::net::SocketAddr,
-        clients: Arc<DashMap<String, SharedWriter>>,
+        clients: Arc<RwLock<HashMap<String, SharedWriter>>>,
     ) -> anyhow::Result<()> {
         log::info!("Client connected from {}", addr);
         if let Some((mut reader, name)) = Self::join_client(stream, &clients)? {
@@ -128,7 +119,7 @@ impl RunningServer {
 
     fn join_client(
         stream: TcpStream,
-        clients: &Arc<DashMap<String, SharedWriter>>,
+        clients: &Arc<RwLock<HashMap<String, SharedWriter>>>,
     ) -> anyhow::Result<Option<(MessageReader<ClientToServerMsg, SocketWrapper>, String)>> {
         let stream = Arc::new(stream);
         let mut reader = MessageReader::new(SocketWrapper(stream.clone()));
@@ -137,7 +128,7 @@ impl RunningServer {
         let msg = reader.read().expect("No initial msg received")?;
         match msg {
             ClientToServerMsg::Join { name } => {
-                if clients.contains_key(&name) {
+                if clients.read().unwrap().contains_key(&name) {
                     writer.write(ServerToClientMsg::Error(
                         "Username already taken".to_owned(),
                     ))?;
@@ -145,7 +136,7 @@ impl RunningServer {
                 }
                 log::info!("User {name} joined");
                 writer.write(ServerToClientMsg::Welcome)?;
-                clients.insert(
+                clients.write().unwrap().insert(
                     name.clone(),
                     SharedWriter {
                         writer: Mutex::new(writer),
@@ -165,78 +156,88 @@ impl RunningServer {
     fn handle_joined(
         name: String,
         reader: MessageReader<ClientToServerMsg, SocketWrapper>,
-        clients: Arc<DashMap<String, SharedWriter>>,
+        clients: Arc<RwLock<HashMap<String, SharedWriter>>>,
     ) -> anyhow::Result<()> {
         for msg in reader {
             let msg = msg?;
             match msg {
                 ClientToServerMsg::Join { .. } => {
-                    clients.get(&name).unwrap().writer.lock().unwrap().write(
-                        ServerToClientMsg::Error("Unexpected message received".to_owned()),
-                    )?;
-                    break;
-                }
-                ClientToServerMsg::Ping => {
-                    clients
-                        .get(&name)
-                        .unwrap()
-                        .writer
-                        .lock()
-                        .unwrap()
-                        .write(ServerToClientMsg::Pong)?;
-                }
-                ClientToServerMsg::ListUsers => {
-                    let users = clients.iter().map(|entry| entry.key().clone()).collect();
-                    clients
-                        .get(&name)
-                        .unwrap()
-                        .writer
-                        .lock()
-                        .unwrap()
-                        .write(ServerToClientMsg::UserList { users })?;
-                }
-                ClientToServerMsg::SendDM { to, message } => {
-                    let client = clients.get_mut(&name).unwrap();
-                    let mut writer = client.writer.lock().unwrap();
-                    if to == name {
-                        writer.write(ServerToClientMsg::Error(
-                            "Cannot send a DM to yourself".to_owned(),
-                        ))?;
-                    } else if let Some(client) = clients.get(&to) {
+                    let clients = clients.read().unwrap();
+                    if let Some(client) = clients.get(&name) {
                         client
                             .writer
                             .lock()
                             .unwrap()
-                            .write(ServerToClientMsg::Message {
-                                from: name.clone(),
-                                message,
-                            })?;
-                    } else {
-                        writer.write(ServerToClientMsg::Error(format!(
-                            "User {to} does not exist"
-                        )))?;
+                            .write(ServerToClientMsg::Error(
+                                "Unexpected message received".to_owned(),
+                            ))?;
+                    }
+                    break;
+                }
+                ClientToServerMsg::Ping => {
+                    let clients = clients.read().unwrap();
+                    if let Some(client) = clients.get(&name) {
+                        client
+                            .writer
+                            .lock()
+                            .unwrap()
+                            .write(ServerToClientMsg::Pong)?;
                     }
                 }
-                ClientToServerMsg::Broadcast { message } => {
-                    let client = clients.get(&name).unwrap();
-                    let mut writer = client.writer.lock().unwrap();
-                    for entry in clients.iter() {
-                        if entry.key() != &name {
-                            entry.value().writer.lock().unwrap().write(
-                                ServerToClientMsg::Message {
+                ClientToServerMsg::ListUsers => {
+                    let clients = clients.read().unwrap();
+                    let users = clients.keys().cloned().collect();
+                    if let Some(client) = clients.get(&name) {
+                        client
+                            .writer
+                            .lock()
+                            .unwrap()
+                            .write(ServerToClientMsg::UserList { users })?;
+                    }
+                }
+                ClientToServerMsg::SendDM { to, message } => {
+                    let clients = clients.read().unwrap();
+                    if let Some(sender) = clients.get(&name) {
+                        let mut writer = sender.writer.lock().unwrap();
+                        if to == name {
+                            writer.write(ServerToClientMsg::Error(
+                                "Cannot send a DM to yourself".to_owned(),
+                            ))?;
+                        } else if let Some(recipient) = clients.get(&to) {
+                            recipient
+                                .writer
+                                .lock()
+                                .unwrap()
+                                .write(ServerToClientMsg::Message {
                                     from: name.clone(),
-                                    message: message.clone(),
-                                },
-                            )?;
+                                    message,
+                                })?;
+                        } else {
+                            writer.write(ServerToClientMsg::Error(format!(
+                                "User {to} does not exist"
+                            )))?;
                         }
                     }
                 }
-
-                _ => {}
+                ClientToServerMsg::Broadcast { message } => {
+                    let clients = clients.read().unwrap();
+                    for (recipient_name, recipient) in clients.iter() {
+                        if recipient_name != &name {
+                            recipient
+                                .writer
+                                .lock()
+                                .unwrap()
+                                .write(ServerToClientMsg::Message {
+                                    from: name.clone(),
+                                    message: message.clone(),
+                                })?;
+                        }
+                    }
+                }
             }
         }
         // Clean up when client disconnects
-        clients.remove(&name);
+        clients.write().unwrap().remove(&name);
         Ok(())
     }
 }
@@ -254,9 +255,9 @@ impl Drop for RunningServer {
         }
 
         // Shutdown all client connections
-        for entry in self.clients.iter() {
-            entry
-                .value()
+        let clients = self.clients.read().unwrap();
+        for (_, client) in clients.iter() {
+            client
                 .writer
                 .lock()
                 .unwrap()
