@@ -81,8 +81,9 @@ struct ServerOpts {
 use server::RunningServer;
 
 fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
-    let mut server = server::Server::new(opts.max_clients)?;
-    Ok(server.run())
+    let mut server = RunningServer::new(opts.max_clients)?;
+    server.run();
+    Ok(server)
 }
 
 #[cfg(test)]
