@@ -25,11 +25,11 @@
 /// The following modules were prepared for you. You should not need to modify them.
 ///
 /// Take a look at this file to see how should the individual messages be handled
-mod messages;
+pub mod messages;
 /// Message reading
-mod reader;
+pub mod reader;
 /// Message writing
-mod writer;
+pub mod writer;
 
 #[derive(Copy, Clone)]
 struct ServerOpts {
@@ -78,8 +78,11 @@ struct ServerOpts {
 /// You can use the same mechanism as last week, or try something else.
 ///
 /// See tests for more details.
-fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> { todo!() }
-
+///
+struct RunningServer {}
+fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
+    todo!()
+}
 
 #[cfg(test)]
 mod tests {
