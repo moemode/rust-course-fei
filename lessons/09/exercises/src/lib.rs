@@ -28,6 +28,8 @@
 pub mod messages;
 /// Message reading
 pub mod reader;
+/// Server
+mod server;
 /// Message writing
 pub mod writer;
 
@@ -79,9 +81,10 @@ struct ServerOpts {
 ///
 /// See tests for more details.
 ///
-struct RunningServer {}
+use server::RunningServer;
+
 fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
-    todo!()
+    RunningServer::new(opts.max_clients)
 }
 
 #[cfg(test)]
