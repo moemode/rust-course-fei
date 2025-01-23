@@ -1,22 +1,15 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, RawFd};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use epoll::{Event, Events};
-use nix::fcntl::OFlag;
-use nix::unistd::pipe2;
-
-use crate::reader;
 use crate::{
     messages::ClientToServerMsg, messages::ServerToClientMsg, reader::MessageReader,
     writer::MessageWriter,
 };
+use epoll::{Event, Events};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -40,6 +33,16 @@ impl Write for SocketWrapper {
     fn flush(&mut self) -> std::io::Result<()> {
         self.0.as_ref().flush()
     }
+}
+
+fn add_fd_to_epoll(epoll: RawFd, fd: RawFd, events: Events) -> std::io::Result<()> {
+    epoll::ctl(
+        epoll,
+        epoll::ControlOptions::EPOLL_CTL_ADD,
+        fd,
+        Event::new(events, fd as u64),
+    )?;
+    Ok(())
 }
 
 struct SharedWriter {
@@ -94,38 +97,6 @@ impl Drop for RunningServer {
     }
 }
 
-fn add_fd_to_epoll(epoll: RawFd, fd: RawFd, events: Events) -> std::io::Result<()> {
-    epoll::ctl(
-        epoll,
-        epoll::ControlOptions::EPOLL_CTL_ADD,
-        fd,
-        Event::new(events, fd as u64),
-    )?;
-    Ok(())
-}
-
-fn try_recv_msg(client: &mut Client) -> Option<ClientToServerMsg> {
-    let msg = match client.reader.recv() {
-        Some(Ok(msg)) => msg,
-        Some(Err(error)) if error.kind() == ErrorKind::WouldBlock => {
-            return None;
-        }
-        Some(Err(error)) => {
-            println!("Error reading from {}: {}", client.address, error);
-            client.connected = false;
-            return None;
-        }
-        None => {
-            println!("Client {} disconnected", client.address);
-            client.connected = false;
-            return None;
-        }
-    };
-    client.last_activity = Instant::now();
-    eprintln!("Received message from {}: {:?}", client.address, msg);
-    Some(msg)
-}
-
 struct Server {
     clients: HashMap<RawFd, Client>,
     client_writers: HashMap<String, MessageWriter<ServerToClientMsg, SocketWrapper>>,
@@ -158,18 +129,18 @@ impl Server {
             let fd = event.data as RawFd;
             if fd == self.listener.as_raw_fd() {
                 self.accept_and_setup_client()?;
+                continue;
             }
-            self.clients.entry(fd).and_modify(|client| {
-                let msg = try_recv_msg(client);
-                msg.map(|m| {
-                    if client.name.is_none() {
-                        //handle_unregistered_client_msg(client, msg);
-                    } else {
-                        //handle_registered_client(msg);
+            if let Some(client) = self.clients.get_mut(&fd) {
+                if let Some(msg) = Self::try_recv_msg(client) {
+                    if let Err(e) = Self::handle_client_msg(client, &mut self.client_writers, msg) {
+                        log::error!("Error handling message from {}: {}", client.address, e);
+                        client.connected = false;
                     }
-                });
-            });
+                }
+            }
         }
+        self.cleanup_disconnected();
         Ok(())
     }
 
@@ -200,37 +171,149 @@ impl Server {
         );
         Ok(())
     }
-}
 
-/*
-fn handle_unregistered_client_msg(client: &mut Client, msg: ClientToServerMsg) {
-    match msg {
-        ClientToServerMsg::Join { name } => {
-            if clients.read().unwrap().contains_key(&name) {
-                writer.write(ServerToClientMsg::Error(
-                    "Username already taken".to_owned(),
-                ))?;
-                return Ok(None);
+    fn try_recv_msg(client: &mut Client) -> Option<ClientToServerMsg> {
+        let msg = match client.reader.recv() {
+            Some(Ok(msg)) => msg,
+            Some(Err(error)) if error.kind() == ErrorKind::WouldBlock => {
+                return None;
             }
-            log::info!("User {name} joined");
-            writer.write(ServerToClientMsg::Welcome)?;
-            clients.write().unwrap().insert(
-                name.clone(),
-                SharedWriter {
-                    writer: Mutex::new(writer),
-                },
-            );
-            Ok(Some((reader, name)))
-        }
-        _ => {
-            writer.write(ServerToClientMsg::Error(
-                "Unexpected message received".to_owned(),
-            ))?;
-            Ok(None)
+            Some(Err(error)) => {
+                println!("Error reading from {}: {}", client.address, error);
+                client.connected = false;
+                return None;
+            }
+            None => {
+                println!("Client {} disconnected", client.address);
+                client.connected = false;
+                return None;
+            }
+        };
+        client.last_activity = Instant::now();
+        eprintln!("Received message from {}: {:?}", client.address, msg);
+        Some(msg)
+    }
+
+    fn handle_client_msg(
+        client: &mut Client,
+        client_writers: &mut HashMap<String, MessageWriter<ServerToClientMsg, SocketWrapper>>,
+        msg: ClientToServerMsg,
+    ) -> anyhow::Result<()> {
+        match client.name.clone() {
+            None => Self::handle_unregistered_client_msg(client, client_writers, msg),
+            Some(name) => Self::handle_registered_client(name, client, client_writers, msg),
         }
     }
+
+    fn handle_unregistered_client_msg(
+        client: &mut Client,
+        client_writers: &mut HashMap<String, MessageWriter<ServerToClientMsg, SocketWrapper>>,
+        msg: ClientToServerMsg,
+    ) -> anyhow::Result<()> {
+        match msg {
+            ClientToServerMsg::Join { name } => {
+                if client_writers.contains_key(&name) {
+                    client.writer.send(ServerToClientMsg::Error(
+                        "Username already taken".to_owned(),
+                    ))?;
+                }
+                log::info!("User {name} joined");
+                client.name = Some(name.clone());
+                client_writers.insert(
+                    name,
+                    MessageWriter::new(SocketWrapper(client.writer.inner().0.clone())),
+                );
+                client.writer.send(ServerToClientMsg::Welcome)?;
+                Ok(())
+            }
+            _ => {
+                client.writer.send(ServerToClientMsg::Error(
+                    "Unexpected message received".to_owned(),
+                ))?;
+                Err(anyhow::anyhow!("Unexpected message received"))
+            }
+        }
+    }
+
+    fn handle_registered_client(
+        name: String,
+        client: &mut Client,
+        client_writers: &mut HashMap<String, MessageWriter<ServerToClientMsg, SocketWrapper>>,
+        msg: ClientToServerMsg,
+    ) -> anyhow::Result<()> {
+        match msg {
+            ClientToServerMsg::Join { .. } => {
+                client.writer.send(ServerToClientMsg::Error(
+                    "Unexpected message received".to_owned(),
+                ))?;
+                Err(anyhow::anyhow!("Unexpected message received"))
+            }
+            ClientToServerMsg::Ping => {
+                client.writer.send(ServerToClientMsg::Pong)?;
+                Ok(())
+            }
+            ClientToServerMsg::ListUsers => {
+                let users = client_writers.keys().cloned().collect();
+                client.writer.send(ServerToClientMsg::UserList { users })?;
+                Ok(())
+            }
+            ClientToServerMsg::SendDM { to, message } => {
+                if to == name {
+                    client.writer.send(ServerToClientMsg::Error(
+                        "Cannot send a DM to yourself".to_owned(),
+                    ))?;
+                } else if let Some(recipient) = client_writers.get_mut(&to) {
+                    recipient.send(ServerToClientMsg::Message {
+                        from: name.clone(),
+                        message,
+                    })?;
+                } else {
+                    client.writer.send(ServerToClientMsg::Error(format!(
+                        "User {to} does not exist"
+                    )))?;
+                }
+                Ok(())
+            }
+            ClientToServerMsg::Broadcast { message } => {
+                for (recipient_name, recipient) in client_writers {
+                    if recipient_name != &name {
+                        recipient.send(ServerToClientMsg::Message {
+                            from: name.clone(),
+                            message: message.clone(),
+                        })?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn cleanup_disconnected(&mut self) {
+        self.clients.retain(|_, client| {
+            if !client.connected {
+                if let Some(name) = &client.name {
+                    self.client_writers.remove(name);
+                }
+                epoll::ctl(
+                    self.epoll,
+                    epoll::ControlOptions::EPOLL_CTL_DEL,
+                    client.reader.inner().0.as_raw_fd(),
+                    Event::new(Events::EPOLLIN, client.reader.inner().0.as_raw_fd() as u64),
+                )
+                .unwrap();
+                client
+                    .reader
+                    .inner()
+                    .0
+                    .shutdown(std::net::Shutdown::Both)
+                    .unwrap();
+                eprintln!("Client disconnected: {}", client.address);
+            }
+            client.connected
+        });
+    }
 }
- */
+
 /*
     fn handle_client(
         stream: std::net::TcpStream,
