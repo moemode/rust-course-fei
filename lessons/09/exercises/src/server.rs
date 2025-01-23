@@ -70,7 +70,7 @@ impl RunningServer {
     }
     pub fn new(max_clients: usize) -> anyhow::Result<Self> {
         let terminated = Arc::new(AtomicBool::new(false));
-        let mut server = Server::new()?;
+        let mut server = Server::new(max_clients)?;
         let port = server.port;
         let terminated_clone = terminated.clone();
         let h = std::thread::spawn(move || -> anyhow::Result<()> {
@@ -98,7 +98,9 @@ impl Drop for RunningServer {
 }
 
 struct Server {
+    max_clients: usize,
     clients: HashMap<RawFd, Client>,
+    rejected_clients: HashMap<RawFd, Client>,
     client_writers: HashMap<String, MessageWriter<ServerToClientMsg, SocketWrapper>>,
     listener: TcpListener,
     epoll: RawFd,
@@ -106,15 +108,21 @@ struct Server {
 }
 
 impl Server {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(max_clients: usize) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let epoll = epoll::create(false)?;
-        add_fd_to_epoll(epoll, listener.as_raw_fd(), Events::EPOLLIN)?;
-        log::info!("Listening on port {port}");
+        add_fd_to_epoll(
+            epoll,
+            listener.as_raw_fd(),
+            Events::EPOLLIN | Events::EPOLLOUT,
+        )?;
+        println!("Listening on port {port}");
         Ok(Self {
+            max_clients,
             clients: HashMap::new(),
+            rejected_clients: HashMap::new(),
             client_writers: HashMap::new(),
             listener,
             epoll,
@@ -129,15 +137,18 @@ impl Server {
             let fd = event.data as RawFd;
             if fd == self.listener.as_raw_fd() {
                 self.accept_and_setup_client()?;
-                continue;
-            }
-            if let Some(client) = self.clients.get_mut(&fd) {
+            } else if let Some(client) = self.clients.get_mut(&fd) {
                 if let Some(msg) = Self::try_recv_msg(client) {
                     if let Err(e) = Self::handle_client_msg(client, &mut self.client_writers, msg) {
                         log::error!("Error handling message from {}: {}", client.address, e);
                         client.connected = false;
                     }
                 }
+            } else if let Some(client) = self.rejected_clients.get_mut(&fd) {
+                client
+                    .writer
+                    .send(ServerToClientMsg::Error("Server full".to_owned()))?;
+                client.connected = false;
             }
         }
         self.cleanup_disconnected();
@@ -154,21 +165,22 @@ impl Server {
         stream.set_nonblocking(true)?;
         add_fd_to_epoll(self.epoll, stream.as_raw_fd(), Events::EPOLLIN)?;
         let stream = Arc::new(stream);
-        self.clients.insert(
-            stream.as_raw_fd(),
-            Client {
-                name: None,
-                address,
-                reader: MessageReader::<ClientToServerMsg, SocketWrapper>::new(SocketWrapper(
-                    stream.clone(),
-                )),
-                writer: MessageWriter::<ServerToClientMsg, SocketWrapper>::new(SocketWrapper(
-                    stream,
-                )),
-                last_activity: Instant::now(),
-                connected: true,
-            },
-        );
+        let stream_fd = stream.as_raw_fd();
+        let c = Client {
+            name: None,
+            address,
+            reader: MessageReader::<ClientToServerMsg, SocketWrapper>::new(SocketWrapper(
+                stream.clone(),
+            )),
+            writer: MessageWriter::<ServerToClientMsg, SocketWrapper>::new(SocketWrapper(stream)),
+            last_activity: Instant::now(),
+            connected: true,
+        };
+        if self.clients.len() >= self.max_clients {
+            self.rejected_clients.insert(stream_fd, c);
+        } else {
+            self.clients.insert(stream_fd, c);
+        }
         Ok(())
     }
 
@@ -190,7 +202,7 @@ impl Server {
             }
         };
         client.last_activity = Instant::now();
-        eprintln!("Received message from {}: {:?}", client.address, msg);
+        println!("Received message from {}: {:?}", client.address, msg);
         Some(msg)
     }
 
@@ -217,7 +229,7 @@ impl Server {
                         "Username already taken".to_owned(),
                     ))?;
                 }
-                log::info!("User {name} joined");
+                println!("User {name} joined");
                 client.name = Some(name.clone());
                 client_writers.insert(
                     name,
@@ -298,7 +310,10 @@ impl Server {
                     self.epoll,
                     epoll::ControlOptions::EPOLL_CTL_DEL,
                     client.reader.inner().0.as_raw_fd(),
-                    Event::new(Events::EPOLLIN, client.reader.inner().0.as_raw_fd() as u64),
+                    Event::new(
+                        Events::EPOLLIN | Events::EPOLLOUT,
+                        client.reader.inner().0.as_raw_fd() as u64,
+                    ),
                 )
                 .unwrap();
                 client

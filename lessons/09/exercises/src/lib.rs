@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn max_clients() {
+    fn max_clientsey() {
         run_test(opts(2), |server| {
             let _client = server.client();
             let _client2 = server.client();
