@@ -59,7 +59,6 @@ pub struct RunningServer {
     pub port: u16,
     poller_thread: Option<JoinHandle<anyhow::Result<()>>>,
     terminated: Arc<AtomicBool>,
-    terminate_pipe: RawFd,
 }
 
 impl RunningServer {
@@ -67,31 +66,31 @@ impl RunningServer {
         self.port
     }
     pub fn new(max_clients: usize) -> anyhow::Result<Self> {
-        let (mut server, terminate_pipe) = Server::new()?;
+        let terminated = Arc::new(AtomicBool::new(false));
+        let mut server = Server::new()?;
         let port = server.port;
+        let terminated_clone = terminated.clone();
         let h = std::thread::spawn(move || -> anyhow::Result<()> {
-            while !server.process_events()? {}
+            while !terminated_clone.load(Ordering::SeqCst) {
+                server.process_events(100)?;
+            }
             Ok(())
         });
 
         Ok(Self {
             port,
             poller_thread: Some(h),
-            terminated: Arc::new(AtomicBool::new(false)),
-            terminate_pipe,
+            terminated,
         })
     }
 }
 
 impl Drop for RunningServer {
     fn drop(&mut self) {
-        use std::os::unix::io::FromRawFd;
-        // Signal termination through pipe
-        unsafe {
-            let mut pipe = std::fs::File::from_raw_fd(self.terminate_pipe);
-            let _ = pipe.write_all(&[1]);
+        self.terminated.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.poller_thread.take() {
+            thread.join().unwrap().unwrap();
         }
-        self.poller_thread.take().unwrap().join().unwrap();
     }
 }
 
@@ -133,44 +132,30 @@ struct Server {
     listener: TcpListener,
     epoll: RawFd,
     port: u16,
-    terminate_pipe_read: RawFd,
 }
 
 impl Server {
-    pub fn new() -> anyhow::Result<(Self, RawFd)> {
+    pub fn new() -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let epoll = epoll::create(false)?;
-
-        // Create non-blocking pipe for termination signaling
-        let (read_fd, write_fd) = pipe2(OFlag::O_NONBLOCK)?;
-
         add_fd_to_epoll(epoll, listener.as_raw_fd(), Events::EPOLLIN)?;
-        add_fd_to_epoll(epoll, read_fd, Events::EPOLLIN)?;
-
         log::info!("Listening on port {port}");
-        Ok((
-            Self {
-                clients: HashMap::new(),
-                client_writers: HashMap::new(),
-                listener,
-                epoll,
-                port,
-                terminate_pipe_read: read_fd,
-            },
-            write_fd,
-        ))
+        Ok(Self {
+            clients: HashMap::new(),
+            client_writers: HashMap::new(),
+            listener,
+            epoll,
+            port,
+        })
     }
 
-    fn process_events(&mut self) -> anyhow::Result<bool> {
+    fn process_events(&mut self, timeout_ms: i32) -> anyhow::Result<()> {
         let mut events = [Event::new(Events::empty(), 0); 1024];
-        let event_count = epoll::wait(self.epoll, 100, &mut events)?;
+        let event_count = epoll::wait(self.epoll, timeout_ms, &mut events)?;
         for event in &events[..event_count] {
             let fd = event.data as RawFd;
-            if fd == self.terminate_pipe_read {
-                return Ok(true); // Termination requested
-            }
             if fd == self.listener.as_raw_fd() {
                 self.accept_and_setup_client()?;
             }
@@ -185,7 +170,7 @@ impl Server {
                 });
             });
         }
-        Ok(false)
+        Ok(())
     }
 
     fn accept_and_setup_client(&mut self) -> anyhow::Result<()> {
