@@ -110,7 +110,9 @@ mod tests {
     #[tokio::test]
     async fn max_clients() {
         run_test(opts(2), |server| async move {
+            println!("Client 1");
             let _client = server.client().await;
+            println!("Client 2");
             let _client2 = server.client().await;
 
             let mut client3 = server.client().await;
@@ -831,10 +833,12 @@ mod tests {
 
     impl ClientSpawner {
         async fn client(&self) -> Client {
+            println!("Connecting to server on port {}", self.port);
             let client = TcpStream::connect(("127.0.0.1", self.port))
                 .await
                 .expect("cannot connect to server");
 
+            println!("Connected to server");
             let (rx, tx) = client.into_split();
 
             let reader = MessageReader::<ServerToClientMsg, _>::new(rx);

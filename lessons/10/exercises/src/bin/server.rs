@@ -1,9 +1,7 @@
 //! You can use this file for experiments.
 
-use futures_util::future::select_all;
-use tokio::select;
 use tokio::task::JoinSet;
-use week10::messages::{ClientToServerMsg, ServerToClientMsg};
+use week10::messages::ClientToServerMsg;
 use week10::reader::MessageReader;
 
 async fn handle_client(mut reader: MessageReader<ClientToServerMsg, tokio::net::TcpStream>) {
