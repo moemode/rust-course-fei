@@ -70,7 +70,7 @@ impl RunningServer {
         let clients = self.clients.clone();
         let max_clients = self.max_clients;
         let client_threads = self.client_handles.clone();
-        let terminated = self.terminated.clone();
+        let terminated: Arc<AtomicBool> = self.terminated.clone();
 
         let h = std::thread::spawn(move || -> anyhow::Result<()> {
             loop {
