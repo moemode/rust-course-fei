@@ -119,6 +119,7 @@ impl Server {
             Events::EPOLLIN | Events::EPOLLOUT,
         )?;
         println!("Listening on port {port}");
+        std::io::stdout().flush().ok();
         Ok(Self {
             max_clients,
             clients: HashMap::new(),
@@ -162,6 +163,7 @@ impl Server {
             Err(error) => return Err(error.into()),
         };
         println!("Connection from {}", address);
+        std::io::stdout().flush().ok();
         stream.set_nonblocking(true)?;
         add_fd_to_epoll(self.epoll, stream.as_raw_fd(), Events::EPOLLIN)?;
         let stream = Arc::new(stream);
@@ -203,6 +205,7 @@ impl Server {
         };
         client.last_activity = Instant::now();
         println!("Received message from {}: {:?}", client.address, msg);
+        std::io::stdout().flush().ok();
         Some(msg)
     }
 
