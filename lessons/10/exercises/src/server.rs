@@ -18,8 +18,8 @@ pub struct RunningServer {
 async fn run_server_loop(
     mut rx: tokio::sync::oneshot::Receiver<()>,
     listener: tokio::net::TcpListener,
-    mut tasks: JoinSet<()>,
 ) -> anyhow::Result<()> {
+    let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
             _ = &mut rx => {
@@ -44,11 +44,10 @@ async fn run_server_loop(
 
 impl RunningServer {
     pub async fn new(max_clients: usize) -> anyhow::Result<Self> {
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = tokio::sync::oneshot::channel();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
-        let mut tasks = JoinSet::new();
-        let server_future = run_server_loop(rx, listener, tasks);
+        let server_future = run_server_loop(rx, listener);
         Ok(RunningServer {
             max_clients,
             port,
