@@ -13,29 +13,25 @@
 //! Your code will run inside [`tokio::task::LocalSet`], so you can use [`tokio::task::spawn_local`]
 //! to spawn new asynchronous tasks.
 
+use crate::server::RunningServer;
+use std::future::Future;
+use std::pin::Pin;
+
 /// The following modules were prepared for you. You should not need to modify them.
 ///
 /// Take a look at this file to see how should the individual messages be handled
-mod messages;
+pub mod messages;
 /// Message reading
-mod reader;
+pub mod reader;
 /// Message writing
-mod writer;
+pub mod writer;
+
+mod server;
 
 #[derive(Copy, Clone)]
 struct ServerOpts {
     /// Maximum number of clients that can be connected to the server at once.
     max_clients: usize,
-}
-
-/// Representation of a running server
-struct RunningServer {
-    /// Port on which the server is running
-    port: u16,
-    /// Main future of the server
-    future: Pin<Box<dyn Future<Output = anyhow::Result<()>>>>,
-    /// Channel that can be used to tell the server to stop
-    tx: tokio::sync::oneshot::Sender<()>,
 }
 
 /// TODO: implement the following asynchronous function called `run_server`
@@ -84,13 +80,15 @@ struct RunningServer {
 /// The rest is handled by the test infrastructure.
 ///
 /// See tests for more details.
-async fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> { todo!() }
-
+async fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
+    RunningServer::new(opts.max_clients).await
+}
 
 #[cfg(test)]
 mod tests {
     use crate::messages::{ClientToServerMsg, ServerToClientMsg};
     use crate::reader::MessageReader;
+    use crate::server::RunningServer;
     use crate::writer::MessageWriter;
     use crate::{run_server, ServerOpts};
     use std::cell::{Cell, RefCell};
