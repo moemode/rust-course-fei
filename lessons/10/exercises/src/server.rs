@@ -1,7 +1,16 @@
 use std::{future::Future, pin::Pin};
 
 use futures_util::future::Join;
-use tokio::task::JoinSet;
+use tokio::{
+    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    task::JoinSet,
+};
+
+use crate::{
+    messages::{ClientToServerMsg, ServerToClientMsg},
+    reader::MessageReader,
+    writer::MessageWriter,
+};
 
 /// Representation of a running server
 pub struct RunningServer {
@@ -26,11 +35,11 @@ async fn run_server_loop(
                 println!("Server is shutting down.");
                 break;
             }
-            Ok((mut socket, _)) = listener.accept() => {
-                tasks.spawn_local(async move {
-                    let (mut reader, mut writer) = socket.split();
-                    tokio::io::copy(&mut reader, &mut writer).await.expect("Failed to copy data");
-                });
+            Ok((client, _)) = listener.accept() => {
+                let (rx, tx) = client.into_split();
+                let reader = MessageReader::<ClientToServerMsg, _>::new(rx);
+                let writer = MessageWriter::<ServerToClientMsg, _>::new(tx);
+                tasks.spawn_local(handle_client(reader, writer));
             }
             task_res = tasks.join_next() => {
                 if let Some(Err(e)) = task_res {
@@ -38,6 +47,16 @@ async fn run_server_loop(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+async fn handle_client(
+    mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
+    mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+) -> anyhow::Result<()> {
+    while let Some(Ok(msg)) = reader.recv().await {
+        println!("{msg:?}");
     }
     Ok(())
 }
