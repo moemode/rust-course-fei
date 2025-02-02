@@ -15,34 +15,40 @@ pub struct RunningServer {
     pub tx: tokio::sync::oneshot::Sender<()>,
 }
 
+async fn run_server_loop(
+    mut rx: tokio::sync::oneshot::Receiver<()>,
+    listener: tokio::net::TcpListener,
+    mut tasks: JoinSet<()>,
+) -> anyhow::Result<()> {
+    loop {
+        tokio::select! {
+            _ = &mut rx => {
+                println!("Server is shutting down.");
+                break;
+            }
+            Ok((mut socket, _)) = listener.accept() => {
+                tasks.spawn_local(async move {
+                    let (mut reader, mut writer) = socket.split();
+                    tokio::io::copy(&mut reader, &mut writer).await.expect("Failed to copy data");
+                });
+            }
+            task_res = tasks.join_next() => {
+                if let Some(Err(e)) = task_res {
+                    eprintln!("Error in client task: {e}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl RunningServer {
     pub async fn new(max_clients: usize) -> anyhow::Result<Self> {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let mut tasks = JoinSet::new();
-        let server_future = async move {
-            loop {
-                tokio::select! {
-                    _ = &mut rx => {
-                        println!("Server is shutting down.");
-                        break;
-                    }
-                    Ok((mut socket, _)) = listener.accept() => {
-                        tasks.spawn_local(async move {
-                            let (mut reader, mut writer) = socket.split();
-                            tokio::io::copy(&mut reader, &mut writer).await.expect("Failed to copy data");
-                        });
-                    }
-                    task_res = tasks.join_next() => {
-                        if let Some(Err(e)) = task_res {
-                            eprintln!("Error in client task: {e}");
-                        }
-                    }
-                }
-            }
-            Ok(())
-        };
+        let server_future = run_server_loop(rx, listener, tasks);
         Ok(RunningServer {
             max_clients,
             port,
