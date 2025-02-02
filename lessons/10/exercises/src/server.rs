@@ -49,12 +49,12 @@ async fn run_server(
                 }
                 tasks.spawn_local(handle_client(reader, writer));
             }
-            /*task_res = tasks.join_next() => {
-                println!("Task completed");
+            task_res = tasks.join_next() => {
+                println!("Task join_next completed");
                 if let Some(Err(e)) = task_res {
                     println!("Error in client task: {e}");
                 }
-            }*/
+            }
         }
     }
     Ok(())
