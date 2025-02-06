@@ -114,6 +114,14 @@ async fn join_client(
     }
 }
 
+/// Then it should start receiving requests from the client.
+/// - If the client ever sends the `Join` message again, the server should respond with an error
+/// "Unexpected message received" and disconnect the client immediately.
+/// - **(NEW)** If the client does not send any message in three seconds AND it does not receive
+/// any message (through a DM or a broadcast) within that duration, the server should respond with
+/// an error "Timeouted" and disconnect the client immediately. This three second timer is refreshed
+/// everytime the client sends something or receives a DM/broadcast.
+///
 async fn handle_client(
     mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
     mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
@@ -130,7 +138,7 @@ async fn handle_client(
     loop {
         tokio::select! {
             msg = reader.recv() => match msg {
-                Some(Ok(msg)) => println!("Got message from {}: {:?}", name, msg),
+                Some(Ok(msg)) => react_client_msg(msg, &mut writer, &clients).await?,
                 _ => break,
             },
             msg = rx.recv() => match msg {
@@ -141,6 +149,85 @@ async fn handle_client(
     }
 
     cleanup();
+    Ok(())
+}
+
+/// pub enum ClientToServerMsg {
+/// This is the first message in the communication, which should be sent by the client.
+/// When some other client with the same name already exists, the server should respond
+/// with an error "Username already taken" and disconnect the new client.
+/// Join { name: String },
+/// This message checks that the connection is OK.
+/// The server should respond with [ServerToClientMsg::Pong].
+/// Ping,
+/// Send a request to list the usernames of users currently connected to the server.
+/// The order of the usernames is not important.
+/// ListUsers,
+/// Sends a direct message to the user with the given name (`to`).
+/// If the user does not exist, the server responds with an error "User <to> does not exist".
+/// If the client tries to send a message to themselves, the server responds with an error
+/// "Cannot send a DM to yourself".
+/// SendDM { to: String, message: String },
+/// Sends a message to all currently connected users (except for the sender of the broadcast).
+/// Broadcast { message: String },
+/// }
+async fn react_client_msg(
+    msg: ClientToServerMsg,
+    writer: &mut MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    clients: &ClientMap,
+) -> anyhow::Result<()> {
+    match msg {
+        ClientToServerMsg::Ping => {
+            writer.send(ServerToClientMsg::Pong).await?;
+        }
+        ClientToServerMsg::ListUsers => {
+            let users = clients.borrow().keys().cloned().collect();
+            writer.send(ServerToClientMsg::UserList { users }).await?;
+        }
+        /*
+        ClientToServerMsg::SendDM { to, message } => {
+            if to == *name {
+                writer
+                    .send(ServerToClientMsg::Error(
+                        "Cannot send a DM to yourself".to_owned(),
+                    ))
+                    .await?;
+            } else if let Some(channel) = clients.borrow().get(&to) {
+                channel
+                    .send(ServerToClientMsg::Message {
+                        from: name,
+                        message,
+                    })
+                    .await?;
+            } else {
+                writer
+                    .send(ServerToClientMsg::Error(format!(
+                        "User {to} does not exist"
+                    )))
+                    .await?;
+            }
+        }
+        ClientToServerMsg::Broadcast { message } => {
+            for (client_name, channel) in clients.borrow().iter() {
+                if client_name != name {
+                    channel
+                        .send(ServerToClientMsg::Message {
+                            from: name,
+                            message: message.clone(),
+                        })
+                        .await?;
+                }
+            }
+        }
+        */
+        _ => {
+            writer
+                .send(ServerToClientMsg::Error(
+                    "Unexpected message received".to_owned(),
+                ))
+                .await?;
+        }
+    }
     Ok(())
 }
 
