@@ -447,6 +447,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn message_timeout() {
+        run_test(opts(2), |spawner| async move {
+            let mut niko = spawner.client().await;
+            niko.join("Niko").await;
+
+            sleep(1000).await;
+            niko.ping().await;
+            sleep(1000).await;
+            niko.list_users().await;
+            sleep(4000).await;
+
+            niko.expect_error("Timeouted").await;
+            niko.check_closed().await;
+
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn dm_spam() {
         run_test(opts(2), |spawner| async move {
             let mut diana = spawner.client().await;
@@ -608,26 +628,6 @@ mod tests {
             for mut user in users {
                 user.expect_message("Niko", "Borrow this!").await;
             }
-
-            Ok(())
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn message_timeout() {
-        run_test(opts(2), |spawner| async move {
-            let mut niko = spawner.client().await;
-            niko.join("Niko").await;
-
-            sleep(1000).await;
-            niko.ping().await;
-            sleep(1000).await;
-            niko.list_users().await;
-            sleep(4000).await;
-
-            niko.expect_error("Timeouted").await;
-            niko.check_closed().await;
 
             Ok(())
         })

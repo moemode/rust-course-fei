@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
 
 use futures_util::future;
 use tokio::{
@@ -130,25 +130,19 @@ async fn handle_client(
     let name = join_client(&mut reader, &mut writer, &clients).await?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     clients.borrow_mut().insert(name.clone(), tx);
-
-    let cleanup = || {
-        clients.borrow_mut().remove(&name);
-    };
-
     loop {
         tokio::select! {
-            msg = reader.recv() => match msg {
-                Some(Ok(msg)) => react_client_msg(msg, &name, &mut writer, &clients).await?,
-                _ => break,
-            },
-            msg = rx.recv() => match msg {
-                Some(msg) => writer.send(msg).await?,
-                None => break,
+            Some(Ok(msg)) = reader.recv() => {
+                react_client_msg(msg, &name, &mut writer, &clients).await?;
             }
+            Some(msg) = rx.recv() => {
+                writer.send(msg).await?;
+            }
+            else => break,
         }
     }
+    clients.borrow_mut().remove(&name);
 
-    cleanup();
     Ok(())
 }
 
@@ -221,6 +215,7 @@ async fn react_client_msg(
                     "Unexpected message received".to_owned(),
                 ))
                 .await?;
+            anyhow::bail!("Unexpected message received");
         }
     }
     Ok(())
