@@ -117,11 +117,6 @@ async fn join_client(
 /// Then it should start receiving requests from the client.
 /// - If the client ever sends the `Join` message again, the server should respond with an error
 /// "Unexpected message received" and disconnect the client immediately.
-/// - **(NEW)** If the client does not send any message in three seconds AND it does not receive
-/// any message (through a DM or a broadcast) within that duration, the server should respond with
-/// an error "Timeouted" and disconnect the client immediately. This three second timer is refreshed
-/// everytime the client sends something or receives a DM/broadcast.
-///
 async fn handle_client(
     mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
     mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
@@ -130,11 +125,14 @@ async fn handle_client(
     let name = join_client(&mut reader, &mut writer, &clients).await?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     clients.borrow_mut().insert(name.clone(), tx);
-
     loop {
         tokio::select! {
             msg = reader.recv() => match msg {
-                Some(Ok(msg)) => react_client_msg(msg, &name, &mut writer, &clients).await?,
+                Some(Ok(msg)) => {
+                    if let Err(e) = react_client_msg(msg, &name, &mut writer, &clients).await {
+                        break;
+                    }
+                }
                 _ => break,
             },
             msg = rx.recv() => match msg {
@@ -143,7 +141,6 @@ async fn handle_client(
             }
         }
     }
-
     clients.borrow_mut().remove(&name);
     Ok(())
 }
@@ -217,7 +214,7 @@ async fn react_client_msg(
                     "Unexpected message received".to_owned(),
                 ))
                 .await?;
-            clients.borrow_mut().remove(name);
+            //clients.borrow_mut().remove(name);
             anyhow::bail!("Unexpected message received");
         }
     }
