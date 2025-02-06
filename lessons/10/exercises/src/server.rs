@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::{cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
 
 use futures_util::future;
 use tokio::{
@@ -11,6 +11,9 @@ use crate::{
     reader::MessageReader,
     writer::MessageWriter,
 };
+
+type ClientChannel = tokio::sync::mpsc::Sender<ServerToClientMsg>;
+type ClientMap = Rc<RefCell<HashMap<String, ClientChannel>>>;
 
 /// Representation of a running server
 pub struct RunningServer {
@@ -29,6 +32,7 @@ async fn run_server(
     listener: tokio::net::TcpListener,
     max_clients: usize,
 ) -> anyhow::Result<()> {
+    let clients: ClientMap = Rc::new(RefCell::new(HashMap::new()));
     let mut tasks = JoinSet::new();
     tasks.spawn_local(future::pending());
     println!("Server is running");
@@ -50,7 +54,7 @@ async fn run_server(
                     writer.send(ServerToClientMsg::Error("Server is full".to_owned())).await?;
                     continue;
                 }
-                tasks.spawn_local(handle_client(reader, writer));
+                tasks.spawn_local(handle_client(reader, writer, clients.clone()));
             }
             task_res = tasks.join_next() => {
                 println!("Task completed");
@@ -79,12 +83,17 @@ async fn run_server(
 /// - `Ok(String)` containing the client's username if join is successful
 /// - `Err` if the join fails for any reason listed above
 async fn join_client(
-    mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
-    mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    reader: &mut MessageReader<ClientToServerMsg, OwnedReadHalf>,
+    writer: &mut MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    clients: &ClientMap,
 ) -> anyhow::Result<String> {
     tokio::select! {
         msg = reader.recv() => match msg {
             Some(Ok(ClientToServerMsg::Join { name })) => {
+                if clients.borrow().contains_key(&name) {
+                    writer.send(ServerToClientMsg::Error("Username already taken".to_owned())).await?;
+                    return Err(anyhow::anyhow!("Username already taken"));
+                }
                 writer.send(ServerToClientMsg::Welcome).await?;
                 Ok(name)
             }
@@ -108,8 +117,30 @@ async fn join_client(
 async fn handle_client(
     mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
     mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    clients: ClientMap,
 ) -> anyhow::Result<()> {
-    join_client(reader, writer).await?;
+    let name = join_client(&mut reader, &mut writer, &clients).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    clients.borrow_mut().insert(name.clone(), tx);
+
+    let cleanup = || {
+        clients.borrow_mut().remove(&name);
+    };
+
+    loop {
+        tokio::select! {
+            msg = reader.recv() => match msg {
+                Some(Ok(msg)) => println!("Got message from {}: {:?}", name, msg),
+                _ => break,
+            },
+            msg = rx.recv() => match msg {
+                Some(msg) => writer.send(msg).await?,
+                None => break,
+            }
+        }
+    }
+
+    cleanup();
     Ok(())
 }
 

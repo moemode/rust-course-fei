@@ -114,7 +114,7 @@ mod tests {
             let _client = server.client().await;
             println!("Client 2");
             let _client2 = server.client().await;
-
+            println!("Client 3");
             let mut client3 = server.client().await;
             client3.expect_error("Server is full").await;
             client3.check_closed().await;
