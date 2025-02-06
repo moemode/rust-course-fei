@@ -122,7 +122,7 @@ async fn handle_client(
         tokio::select! {
             msg = reader.recv() => match msg {
                 Some(Ok(msg)) => {
-                    if let Err(e) = react_client_msg(msg, &name, &mut writer, &clients).await {
+                    if (react_client_msg(msg, &name, &mut writer, &clients).await).is_err() {
                         break;
                     }
                 }
