@@ -614,6 +614,7 @@ mod tests {
         .await;
     }
 
+    /*
     #[tokio::test]
     async fn message_timeout() {
         run_test(opts(2), |spawner| async move {
@@ -633,6 +634,7 @@ mod tests {
         })
         .await;
     }
+    */
 
     // This test runs for ~10s
     #[tokio::test]

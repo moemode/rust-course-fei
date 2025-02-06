@@ -131,10 +131,6 @@ async fn handle_client(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     clients.borrow_mut().insert(name.clone(), tx);
 
-    let cleanup = || {
-        clients.borrow_mut().remove(&name);
-    };
-
     loop {
         tokio::select! {
             msg = reader.recv() => match msg {
@@ -148,7 +144,7 @@ async fn handle_client(
         }
     }
 
-    cleanup();
+    clients.borrow_mut().remove(&name);
     Ok(())
 }
 
@@ -221,6 +217,8 @@ async fn react_client_msg(
                     "Unexpected message received".to_owned(),
                 ))
                 .await?;
+            clients.borrow_mut().remove(name);
+            anyhow::bail!("Unexpected message received");
         }
     }
     Ok(())
