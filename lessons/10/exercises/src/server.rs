@@ -12,7 +12,7 @@ use crate::{
     writer::MessageWriter,
 };
 
-type ClientChannel = tokio::sync::mpsc::Sender<ServerToClientMsg>;
+type ClientChannel = tokio::sync::mpsc::UnboundedSender<ServerToClientMsg>;
 type ClientMap = Rc<RefCell<HashMap<String, ClientChannel>>>;
 
 /// Representation of a running server
@@ -128,7 +128,7 @@ async fn handle_client(
     clients: ClientMap,
 ) -> anyhow::Result<()> {
     let name = join_client(&mut reader, &mut writer, &clients).await?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     clients.borrow_mut().insert(name.clone(), tx);
 
     let cleanup = || {
@@ -138,7 +138,7 @@ async fn handle_client(
     loop {
         tokio::select! {
             msg = reader.recv() => match msg {
-                Some(Ok(msg)) => react_client_msg(msg, &mut writer, &clients).await?,
+                Some(Ok(msg)) => react_client_msg(msg, &name, &mut writer, &clients).await?,
                 _ => break,
             },
             msg = rx.recv() => match msg {
@@ -173,6 +173,7 @@ async fn handle_client(
 /// }
 async fn react_client_msg(
     msg: ClientToServerMsg,
+    name: &str,
     writer: &mut MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
     clients: &ClientMap,
 ) -> anyhow::Result<()> {
@@ -184,7 +185,16 @@ async fn react_client_msg(
             let users = clients.borrow().keys().cloned().collect();
             writer.send(ServerToClientMsg::UserList { users }).await?;
         }
-        /*
+        ClientToServerMsg::Broadcast { message } => {
+            for (client_name, channel) in clients.borrow().iter() {
+                if client_name != name {
+                    channel.send(ServerToClientMsg::Message {
+                        from: name.into(),
+                        message: message.clone(),
+                    })?;
+                }
+            }
+        }
         ClientToServerMsg::SendDM { to, message } => {
             if to == *name {
                 writer
@@ -193,12 +203,10 @@ async fn react_client_msg(
                     ))
                     .await?;
             } else if let Some(channel) = clients.borrow().get(&to) {
-                channel
-                    .send(ServerToClientMsg::Message {
-                        from: name,
-                        message,
-                    })
-                    .await?;
+                channel.send(ServerToClientMsg::Message {
+                    from: name.into(),
+                    message,
+                })?;
             } else {
                 writer
                     .send(ServerToClientMsg::Error(format!(
@@ -207,19 +215,6 @@ async fn react_client_msg(
                     .await?;
             }
         }
-        ClientToServerMsg::Broadcast { message } => {
-            for (client_name, channel) in clients.borrow().iter() {
-                if client_name != name {
-                    channel
-                        .send(ServerToClientMsg::Message {
-                            from: name,
-                            message: message.clone(),
-                        })
-                        .await?;
-                }
-            }
-        }
-        */
         _ => {
             writer
                 .send(ServerToClientMsg::Error(
