@@ -35,29 +35,22 @@ async fn run_server(
     let clients: ClientMap = Rc::new(RefCell::new(HashMap::new()));
     let mut tasks = JoinSet::new();
     tasks.spawn_local(future::pending());
-    println!("Server is running");
     loop {
-        println!("Entering select loop");
         tokio::select! {
             _ = &mut rx => {
-                println!("Server is shutting down.");
                 break;
             }
             Ok((client, _)) = listener.accept() => {
-                println!("New client accepted.");
                 let (rx, tx) = client.into_split();
                 let reader = MessageReader::<ClientToServerMsg, _>::new(rx);
                 let mut writer = MessageWriter::<ServerToClientMsg, _>::new(tx);
-                println!("tasks.len(): {}", tasks.len());
                 if tasks.len() > max_clients {
-                    println!("Server is full");
                     writer.send(ServerToClientMsg::Error("Server is full".to_owned())).await?;
                     continue;
                 }
                 tasks.spawn_local(handle_client(reader, writer, clients.clone()));
             }
             task_res = tasks.join_next() => {
-                println!("Task completed");
                 if let Some(Err(e)) = task_res {
                     println!("Error in client task: {e}");
                 }
@@ -214,7 +207,6 @@ async fn react_client_msg(
                     "Unexpected message received".to_owned(),
                 ))
                 .await?;
-            //clients.borrow_mut().remove(name);
             anyhow::bail!("Unexpected message received");
         }
     }
@@ -227,7 +219,6 @@ impl RunningServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let server_future = run_server(rx, listener, max_clients);
-        println!("Server is listening on port {port}");
         Ok(RunningServer {
             max_clients,
             port,

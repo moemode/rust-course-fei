@@ -832,12 +832,10 @@ mod tests {
 
     impl ClientSpawner {
         async fn client(&self) -> Client {
-            println!("Connecting to server on port {}", self.port);
             let client = TcpStream::connect(("127.0.0.1", self.port))
                 .await
                 .expect("cannot connect to server");
 
-            println!("Connected to server");
             let (rx, tx) = client.into_split();
 
             let reader = MessageReader::<ServerToClientMsg, _>::new(rx);
