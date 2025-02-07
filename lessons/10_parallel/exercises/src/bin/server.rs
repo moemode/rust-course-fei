@@ -1,8 +1,8 @@
 //! You can use this file for experiments.
 
 use tokio::task::JoinSet;
-use week10::messages::ClientToServerMsg;
-use week10::reader::MessageReader;
+use week10_parallel::messages::ClientToServerMsg;
+use week10_parallel::reader::MessageReader;
 
 async fn handle_client(mut reader: MessageReader<ClientToServerMsg, tokio::net::TcpStream>) {
     while let Some(Ok(msg)) = reader.recv().await {

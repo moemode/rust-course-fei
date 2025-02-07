@@ -84,7 +84,6 @@ pub async fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
 mod tests {
     use crate::messages::{ClientToServerMsg, ServerToClientMsg};
     use crate::reader::MessageReader;
-    use crate::server::RunningServer;
     use crate::writer::MessageWriter;
     use crate::{run_server, ServerOpts};
     use std::cell::{Cell, RefCell};
