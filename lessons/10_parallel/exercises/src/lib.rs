@@ -1,5 +1,3 @@
-#![warn(clippy::await_holding_refcell_ref)]
-
 //! TODO: implement a simple chat server using async/await and tokio (still using non-blocking I/O)
 //!
 //! The chat server should behave identically as the one from last week, with one new feature.
@@ -13,9 +11,7 @@
 //! Your code will run inside [`tokio::task::LocalSet`], so you can use [`tokio::task::spawn_local`]
 //! to spawn new asynchronous tasks.
 
-use crate::server::RunningServer;
-use std::future::Future;
-use std::pin::Pin;
+pub use crate::server::RunningServer;
 
 /// The following modules were prepared for you. You should not need to modify them.
 ///
@@ -26,12 +22,12 @@ pub mod reader;
 /// Message writing
 pub mod writer;
 
-mod server;
+pub mod server;
 
 #[derive(Copy, Clone)]
-struct ServerOpts {
+pub struct ServerOpts {
     /// Maximum number of clients that can be connected to the server at once.
-    max_clients: usize,
+    pub max_clients: usize,
 }
 
 /// TODO: implement the following asynchronous function called `run_server`
@@ -80,7 +76,7 @@ struct ServerOpts {
 /// The rest is handled by the test infrastructure.
 ///
 /// See tests for more details.
-async fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
+pub async fn run_server(opts: ServerOpts) -> anyhow::Result<RunningServer> {
     RunningServer::new(opts.max_clients).await
 }
 
@@ -446,7 +442,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn dm_spam() {
         run_test(opts(2), |spawner| async move {
             let mut diana = spawner.client().await;

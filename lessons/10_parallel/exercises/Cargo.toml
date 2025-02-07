@@ -17,5 +17,11 @@ tokio = { version = "1.41.1", features = [
     "time",
     "sync",
     "io-util",
+    "signal",
 ] }
 futures-util = "0.3.31"
+clap = { version = "4.4", features = ["derive"] }
+
+[[bin]]
+name = "chatsrv"
+path = "src/bin/chatsrv.rs"
