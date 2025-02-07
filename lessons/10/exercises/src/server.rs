@@ -34,7 +34,6 @@ async fn run_server(
 ) -> anyhow::Result<()> {
     let clients: ClientMap = Rc::new(RefCell::new(HashMap::new()));
     let mut tasks = JoinSet::new();
-    tasks.spawn_local(future::pending());
     loop {
         tokio::select! {
             _ = &mut rx => {
@@ -50,7 +49,7 @@ async fn run_server(
                 }
                 tasks.spawn_local(handle_client(reader, writer, clients.clone()));
             }
-            task_res = tasks.join_next() => {
+            task_res = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(e)) = task_res {
                     println!("Error in client task: {e}");
                 }
