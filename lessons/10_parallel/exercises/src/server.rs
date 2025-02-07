@@ -1,10 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
-
-use futures_util::future;
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
-    task::JoinSet,
+    sync::{Mutex, RwLock},
 };
+
+use tokio::task::JoinSet;
 
 use crate::{
     messages::{ClientToServerMsg, ServerToClientMsg},
@@ -12,8 +12,8 @@ use crate::{
     writer::MessageWriter,
 };
 
-type ClientChannel = tokio::sync::mpsc::UnboundedSender<ServerToClientMsg>;
-type ClientMap = Rc<RefCell<HashMap<String, ClientChannel>>>;
+type SharedWriter = Arc<Mutex<MessageWriter<ServerToClientMsg, OwnedWriteHalf>>>;
+type ClientMap = Arc<RwLock<HashMap<String, SharedWriter>>>;
 
 /// Representation of a running server
 pub struct RunningServer {
@@ -32,22 +32,20 @@ async fn run_server(
     listener: tokio::net::TcpListener,
     max_clients: usize,
 ) -> anyhow::Result<()> {
-    let clients: ClientMap = Rc::new(RefCell::new(HashMap::new()));
+    let clients: ClientMap = Arc::new(RwLock::new(HashMap::new()));
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
-            _ = &mut rx => {
-                break;
-            }
+            _ = &mut rx => break,
             Ok((client, _)) = listener.accept() => {
                 let (rx, tx) = client.into_split();
                 let reader = MessageReader::<ClientToServerMsg, _>::new(rx);
                 let mut writer = MessageWriter::<ServerToClientMsg, _>::new(tx);
-                if tasks.len() > max_clients {
+                if tasks.len() >= max_clients {
                     writer.send(ServerToClientMsg::Error("Server is full".to_owned())).await?;
                     continue;
                 }
-                tasks.spawn_local(handle_client(reader, writer, clients.clone()));
+                tasks.spawn(handle_client(reader, Arc::new(Mutex::new(writer)), clients.clone()));
             }
             task_res = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(e)) = task_res {
@@ -76,31 +74,31 @@ async fn run_server(
 /// - `Err` if the join fails for any reason listed above
 async fn join_client(
     reader: &mut MessageReader<ClientToServerMsg, OwnedReadHalf>,
-    writer: &mut MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    writer: &SharedWriter,
     clients: &ClientMap,
 ) -> anyhow::Result<String> {
     tokio::select! {
         msg = reader.recv() => match msg {
             Some(Ok(ClientToServerMsg::Join { name })) => {
-                if clients.borrow().contains_key(&name) {
-                    writer.send(ServerToClientMsg::Error("Username already taken".to_owned())).await?;
+                if clients.read().await.contains_key(&name) {
+                    writer.lock().await.send(ServerToClientMsg::Error("Username already taken".to_owned())).await?;
                     return Err(anyhow::anyhow!("Username already taken"));
                 }
-                writer.send(ServerToClientMsg::Welcome).await?;
+                writer.lock().await.send(ServerToClientMsg::Welcome).await?;
                 Ok(name)
             }
             Some(Ok(_)) => {
-                writer.send(ServerToClientMsg::Error("Unexpected message received".to_owned())).await?;
+                writer.lock().await.send(ServerToClientMsg::Error("Unexpected message received".to_owned())).await?;
                 Err(anyhow::anyhow!("Unexpected message received"))
             }
             Some(Err(e)) => Err(e.into()),
             None => {
-                writer.send(ServerToClientMsg::Error("Connection closed".to_owned())).await?;
+                writer.lock().await.send(ServerToClientMsg::Error("Connection closed".to_owned())).await?;
                 Err(anyhow::anyhow!("Connection closed"))
             }
         },
         _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
-            writer.send(ServerToClientMsg::Error("Timed out waiting for Join".to_owned())).await?;
+            writer.lock().await.send(ServerToClientMsg::Error("Timed out waiting for Join".to_owned())).await?;
             Err(anyhow::anyhow!("Timed out waiting for Join"))
         }
     }
@@ -111,29 +109,20 @@ async fn join_client(
 /// "Unexpected message received" and disconnect the client immediately.
 async fn handle_client(
     mut reader: MessageReader<ClientToServerMsg, OwnedReadHalf>,
-    mut writer: MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
+    writer: SharedWriter,
     clients: ClientMap,
 ) -> anyhow::Result<()> {
-    let name = join_client(&mut reader, &mut writer, &clients).await?;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    clients.borrow_mut().insert(name.clone(), tx);
-    loop {
-        tokio::select! {
-            msg = reader.recv() => match msg {
-                Some(Ok(msg)) => {
-                    if (react_client_msg(msg, &name, &mut writer, &clients).await).is_err() {
-                        break;
-                    }
-                }
-                _ => break,
-            },
-            msg = rx.recv() => match msg {
-                Some(msg) => writer.send(msg).await?,
-                None => break,
-            }
+    let name = join_client(&mut reader, &writer, &clients).await?;
+    {
+        let mut clients_guard = clients.write().await;
+        clients_guard.insert(name.clone(), writer.clone());
+    }
+    while let Some(Ok(msg)) = reader.recv().await {
+        if react_client_msg(msg, &name, &clients).await.is_err() {
+            break;
         }
     }
-    clients.borrow_mut().remove(&name);
+    clients.write().await.remove(&name);
     Ok(())
 }
 
@@ -159,54 +148,90 @@ async fn handle_client(
 async fn react_client_msg(
     msg: ClientToServerMsg,
     name: &str,
-    writer: &mut MessageWriter<ServerToClientMsg, OwnedWriteHalf>,
     clients: &ClientMap,
 ) -> anyhow::Result<()> {
     match msg {
         ClientToServerMsg::Ping => {
-            writer.send(ServerToClientMsg::Pong).await?;
+            let clients_guard = clients.read().await;
+            if let Some(writer) = clients_guard.get(name) {
+                writer.lock().await.send(ServerToClientMsg::Pong).await?;
+            }
         }
         ClientToServerMsg::ListUsers => {
-            let users = clients.borrow().keys().cloned().collect();
-            writer.send(ServerToClientMsg::UserList { users }).await?;
+            let clients_guard = clients.read().await;
+            let users = clients_guard.keys().cloned().collect();
+            if let Some(writer) = clients_guard.get(name) {
+                writer
+                    .lock()
+                    .await
+                    .send(ServerToClientMsg::UserList { users })
+                    .await?;
+            }
         }
         ClientToServerMsg::Broadcast { message } => {
-            for (client_name, channel) in clients.borrow().iter() {
+            let clients_guard = clients.read().await;
+            for (client_name, writer) in clients_guard.iter() {
                 if client_name != name {
-                    channel.send(ServerToClientMsg::Message {
-                        from: name.into(),
-                        message: message.clone(),
-                    })?;
+                    writer
+                        .lock()
+                        .await
+                        .send(ServerToClientMsg::Message {
+                            from: name.into(),
+                            message: message.clone(),
+                        })
+                        .await?;
                 }
             }
         }
         ClientToServerMsg::SendDM { to, message } => {
-            if to == *name {
-                writer
-                    .send(ServerToClientMsg::Error(
-                        "Cannot send a DM to yourself".to_owned(),
-                    ))
-                    .await?;
-            } else if let Some(channel) = clients.borrow().get(&to) {
-                channel.send(ServerToClientMsg::Message {
-                    from: name.into(),
-                    message,
-                })?;
-            } else {
-                writer
-                    .send(ServerToClientMsg::Error(format!(
-                        "User {to} does not exist"
-                    )))
-                    .await?;
+            let clients_guard = clients.read().await;
+            let sender_writer = clients_guard.get(name);
+            let target_writer = clients_guard.get(&to);
+
+            match (sender_writer, target_writer) {
+                (Some(writer), _) if to == *name => {
+                    writer
+                        .lock()
+                        .await
+                        .send(ServerToClientMsg::Error(
+                            "Cannot send a DM to yourself".to_owned(),
+                        ))
+                        .await?;
+                }
+                (Some(writer), None) => {
+                    writer
+                        .lock()
+                        .await
+                        .send(ServerToClientMsg::Error(format!(
+                            "User {to} does not exist"
+                        )))
+                        .await?;
+                }
+                (_, Some(target_writer)) => {
+                    target_writer
+                        .lock()
+                        .await
+                        .send(ServerToClientMsg::Message {
+                            from: name.into(),
+                            message,
+                        })
+                        .await?;
+                }
+                _ => {}
             }
         }
         _ => {
-            writer
-                .send(ServerToClientMsg::Error(
-                    "Unexpected message received".to_owned(),
-                ))
-                .await?;
-            anyhow::bail!("Unexpected message received");
+            let clients_guard = clients.read().await;
+            if let Some(writer) = clients_guard.get(name) {
+                writer
+                    .lock()
+                    .await
+                    .send(ServerToClientMsg::Error(
+                        "Unexpected message received".to_owned(),
+                    ))
+                    .await?;
+                anyhow::bail!("Unexpected message received");
+            }
         }
     }
     Ok(())

@@ -29,6 +29,7 @@
                     "lessons/08/exercises/Cargo.toml",
                     "lessons/09/exercises/Cargo.toml",
                     "lessons/10/exercises/Cargo.toml",
+                    "lessons/10_parallel/exercises/Cargo.toml",
                     "playground/Cargo.toml"
                 ],
                 "editor.codeActionsOnSave": {
