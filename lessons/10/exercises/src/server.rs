@@ -187,18 +187,21 @@ async fn react_client_msg(
                         "Cannot send a DM to yourself".to_owned(),
                     ))
                     .await?;
-            } else if let Some(channel) = clients.borrow().get(&to) {
+                return Ok(());
+            }
+            if let Some(channel) = clients.borrow().get(&to) {
                 channel.send(ServerToClientMsg::Message {
                     from: name.into(),
                     message,
                 })?;
-            } else {
-                writer
-                    .send(ServerToClientMsg::Error(format!(
-                        "User {to} does not exist"
-                    )))
-                    .await?;
+                return Ok(());
             }
+            writer
+                .send(ServerToClientMsg::Error(format!(
+                    "User {to} does not exist"
+                )))
+                .await?;
+            return Ok(());
         }
         _ => {
             writer
