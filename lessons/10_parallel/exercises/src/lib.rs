@@ -446,7 +446,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn dm_spam() {
         run_test(opts(2), |spawner| async move {
             let mut diana = spawner.client().await;
